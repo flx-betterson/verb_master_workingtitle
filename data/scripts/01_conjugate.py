@@ -11,6 +11,9 @@ import os
 import sys
 from pathlib import Path
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+
 try:
     import mlconjug3
 except ImportError:
@@ -27,30 +30,45 @@ VERB_LIST_PATH = SCRIPT_DIR / "verb_list.txt"
 OUT_DIR = REPO_ROOT / "data" / "raw"
 OUT_PATH = OUT_DIR / "conjugations.json"
 
-# Mapping from mlconjug3 mood keys → our schema Mood enum
+# Mapping from mlconjug3 mood keys → our schema Mood enum.
+# mlconjug3 uses "Condicional" as a separate mood — we flatten it into INDICATIVO
+# since our schema treats condicional as tenses of indicativo.
 MOOD_MAP = {
     "Indicativo": "INDICATIVO",
     "Subjuntivo": "SUBJUNTIVO",
     "Imperativo": "IMPERATIVO",
+    "Condicional": "INDICATIVO",
 }
 
-# Mapping from mlconjug3 tense keys → our schema Tense enum
+# mlconjug3 tense keys include the mood prefix and use inconsistent casing across verbs,
+# e.g. "Indicativo Presente" and "Indicativo presente" both occur.
+# normalize_tense_key() strips the mood prefix and lowercases before this lookup.
 TENSE_MAP = {
-    "Presente": "PRESENTE",
-    "Pretérito Indefinido": "PRETERITO_INDEFINIDO",
-    "Pretérito Imperfecto": "PRETERITO_IMPERFECTO",
-    "Pretérito Perfecto Compuesto": "PRETERITO_PERFECTO_COMPUESTO",
-    "Pretérito Pluscuamperfecto": "PRETERITO_PLUSCUAMPERFECTO",
-    "Futuro": "FUTURO_SIMPLE",
-    "Futuro Perfecto": "FUTURO_PERFECTO",
-    "Condicional": "CONDICIONAL_SIMPLE",
-    "Condicional Perfecto": "CONDICIONAL_PERFECTO",
-    # Subjuntivo
-    "Presente de Subjuntivo": "PRESENTE",
-    "Pretérito Imperfecto de Subjuntivo": "IMPERFECTO_RA",
-    # Imperativo
-    "Imperativo Afirmativo": "IMPERATIVO_AFIRMATIVO",
-    "Imperativo Negativo": "IMPERATIVO_NEGATIVO",
+    # Indicativo / Condicional (after stripping mood prefix)
+    "presente":                       "PRESENTE",
+    "pretérito imperfecto":           "PRETERITO_IMPERFECTO",
+    "pretérito perfecto compuesto":   "PRETERITO_PERFECTO_COMPUESTO",
+    "pretérito pluscuamperfecto":     "PRETERITO_PLUSCUAMPERFECTO",
+    "pretérito perfecto simple":      "PRETERITO_INDEFINIDO",
+    "pretérito indefinido":           "PRETERITO_INDEFINIDO",
+    "futuro":                         "FUTURO_SIMPLE",
+    "futuro perfecto":                "FUTURO_PERFECTO",
+    "condicional":                    "CONDICIONAL_SIMPLE",   # "Condicional Condicional" → "condicional"
+    "simple":                         "CONDICIONAL_SIMPLE",   # "Condicional simple" → "simple"
+    "perfecto":                       "CONDICIONAL_PERFECTO", # "Condicional perfecto" → "perfecto"
+    # Subjuntivo (after stripping "subjuntivo " prefix)
+    "pretérito imperfecto 1":         "IMPERFECTO_RA",
+    "pretérito imperfecto 2":         "IMPERFECTO_SE",
+    "pretérito perfecto":             "PRETERITO_PERFECTO_COMPUESTO",
+    "pretérito pluscuamperfecto 1":   "PRETERITO_PLUSCUAMPERFECTO",
+    # Imperativo (after stripping "imperativo " prefix)
+    "afirmativo":                     "IMPERATIVO_AFIRMATIVO",
+    "negativo":                       "IMPERATIVO_NEGATIVO",
+    "non":                            "IMPERATIVO_NEGATIVO",  # mlconjug3 French-origin quirk
+    # Skipped intentionally:
+    # "pretérito anterior"            — archaic tense, not in schema
+    # "pretérito pluscuamperfecto 2"  — subjuntivo -se form, schema only stores -ra
+    # "futuro" / "futuro perfecto"    — subjuntivo future, rare but kept via shared key above
 }
 
 # Mapping from mlconjug3 person keys → our schema Person enum
@@ -61,6 +79,13 @@ PERSON_MAP = {
     "1p": "NOSOTROS",
     "2p": "VOSOTROS",
     "3p": "ELLOS_ELLAS_USTEDES",
+}
+
+# Known-bad gerund values from the library (data bugs, typically on highly irregular verbs).
+# The library conflates gerundio/participio for these — hardcode the correct gerund.
+GERUND_OVERRIDES = {
+    "ser": "siendo",
+    "ir":  "yendo",
 }
 
 # Haber auxiliary forms for constructing compound tenses if library omits them
@@ -97,14 +122,47 @@ def load_verb_list(path: Path) -> list[str]:
     return verbs
 
 
-def extract_form(raw_form: str) -> str:
-    """Strip pronoun prefix if mlconjug3 returns 'yo hablo' instead of 'hablo'."""
+def normalize_tense_key(mood_key: str, raw_tense_key: str) -> str:
+    """'Indicativo Pretérito imperfecto' → 'pretérito imperfecto'"""
+    key = raw_tense_key.lower().strip()
+    prefix = mood_key.lower().strip() + " "
+    if key.startswith(prefix):
+        key = key[len(prefix):]
+    return key
+
+
+def fix_encoding(s: str) -> str:
+    """Fix UTF-8 mojibake (bytes decoded as Latin-1 then re-stringified)."""
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return s
+
+
+def extract_nested_str(val) -> str | None:
+    """Recurse into nested dicts/OrderedDicts until a non-empty string is found."""
+    if isinstance(val, str):
+        return val if val.strip() not in ("-", "", "None") else None
+    if isinstance(val, dict):
+        for v in val.values():
+            result = extract_nested_str(v)
+            if result:
+                return result
+    return None
+
+
+def extract_form(raw_form) -> str:
+    """Extract clean verb form: resolve nested dicts, fix encoding, strip pronouns."""
+    s = extract_nested_str(raw_form)
+    if not s:
+        return ""
+    s = fix_encoding(s)
     pronouns = ["yo ", "tú ", "él ", "ella ", "usted ", "nosotros ", "nosotras ",
                 "vosotros ", "vosotras ", "ellos ", "ellas ", "ustedes "]
     for p in pronouns:
-        if raw_form.startswith(p):
-            return raw_form[len(p):]
-    return raw_form
+        if s.startswith(p):
+            return s[len(p):]
+    return s
 
 
 def conjugate_verb(conjugator, infinitive: str) -> dict:
@@ -122,21 +180,26 @@ def conjugate_verb(conjugator, infinitive: str) -> dict:
 
     for mood_key, tenses in raw.items():
         if mood_key not in MOOD_MAP:
-            # Handle non-personal forms
-            if "Participio" in mood_key or "Participio" in str(tenses):
-                for _, form in tenses.items() if isinstance(tenses, dict) else []:
-                    past_participle = extract_form(str(form))
-            if "Gerundio" in mood_key:
-                for _, form in tenses.items() if isinstance(tenses, dict) else []:
-                    gerund = extract_form(str(form))
+            if "Particip" in mood_key:  # handles "Participio" and "Participo" (library typo)
+                result = extract_nested_str(tenses)
+                if result:
+                    past_participle = fix_encoding(result)
+            elif "Gerundio" in mood_key:
+                result = extract_nested_str(tenses)
+                if result:
+                    gerund = fix_encoding(result)
+            elif mood_key not in ("Infinitivo", "Infinitif"):
+                print(f"  UNMAPPED mood: '{mood_key}' — add to MOOD_MAP if needed")
             continue
 
         mood = MOOD_MAP[mood_key]
 
         for tense_key, persons in tenses.items():
-            tense = TENSE_MAP.get(tense_key)
+            normalized = normalize_tense_key(mood_key, tense_key)
+            tense = TENSE_MAP.get(normalized)
             if not tense:
-                print(f"  UNMAPPED tense: '{tense_key}' — add to TENSE_MAP")
+                if normalized not in ("pretérito anterior", "pretérito pluscuamperfecto 2"):
+                    print(f"  UNMAPPED tense: '{tense_key}' (normalized: '{normalized}') — add to TENSE_MAP")
                 continue
 
             if not isinstance(persons, dict):
@@ -159,6 +222,18 @@ def conjugate_verb(conjugator, infinitive: str) -> dict:
                     "noteEn": None,
                     "noteDe": None,
                 })
+
+    # Deduplicate by (mood, tense, person) — last value wins.
+    # The library returns both an ML-predicted entry (Title Case tense key, unreliable)
+    # and a database-driven entry (sentence case tense key, correct). The database form
+    # comes last in iteration so it overwrites the ML garbage for irregular verbs.
+    seen: dict[tuple, dict] = {}
+    for conj in conjugations:
+        seen[(conj["mood"], conj["tense"], conj["person"])] = conj
+    conjugations = list(seen.values())
+
+    if infinitive in GERUND_OVERRIDES:
+        gerund = GERUND_OVERRIDES[infinitive]
 
     return {
         "infinitive": infinitive,
@@ -215,7 +290,7 @@ def main():
         if isinstance(tenses, dict):
             for tense, persons in tenses.items():
                 person_keys = list(persons.keys()) if isinstance(persons, dict) else persons
-                print(f"    Tense: {repr(tense)} → persons: {person_keys}")
+                print(f"    Tense: {repr(tense)} -> persons: {person_keys}")
     print("--- END DEBUG ---\n")
 
     results = []
