@@ -24,4 +24,23 @@ context/            Agent handoff docs (non-code)
 **Step 1 — Data Schema design** (no code written yet)
 
 ## Key Commands
-_Populated once apps are scaffolded._
+
+```bash
+# Install all dependencies (run from repo root)
+npm install
+
+# Development
+npm run dev:api        # Fastify API on http://localhost:3001
+npm run dev:web        # Vite frontend on http://localhost:3000
+
+# Database (run from apps/api/)
+npx prisma migrate dev --name <name>   # apply schema changes
+npx prisma db seed                     # seed from data/processed/verbs_final.json
+npx prisma studio                      # visual DB browser
+
+# Data pipeline (run from data/scripts/ with .venv active)
+python 01_conjugate.py   # generate conjugations
+python 02_enrich.py      # Claude API — translations + tags
+python 03_merge.py       # merge into verbs_final.json
+python 04_validate.py    # pre-seed validation
+```

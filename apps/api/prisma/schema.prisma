@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Mood {
+  INDICATIVO
+  SUBJUNTIVO
+  IMPERATIVO
+}
+
+enum Tense {
+  PRESENTE
+  PRETERITO_INDEFINIDO
+  PRETERITO_IMPERFECTO
+  PRETERITO_PERFECTO_COMPUESTO
+  PRETERITO_PLUSCUAMPERFECTO
+  FUTURO_SIMPLE
+  FUTURO_PERFECTO
+  CONDICIONAL_SIMPLE
+  CONDICIONAL_PERFECTO
+  IMPERFECTO_RA
+  IMPERFECTO_SE
+  IMPERATIVO_AFIRMATIVO
+  IMPERATIVO_NEGATIVO
+}
+
+enum Person {
+  YO
+  TU
+  EL_ELLA_USTED
+  NOSOTROS
+  VOSOTROS
+  ELLOS_ELLAS_USTEDES
+}
+
+model Verb {
+  id             String        @id @default(cuid())
+  infinitive     String        @unique
+  translationsEn Json
+  translationsDe Json
+  gerund         String
+  pastParticiple String
+  isReflexive    Boolean       @default(false)
+  cefrLevel      String
+  thematicGroup  String
+  tags           Json
+  conjugations   Conjugation[]
+  createdAt      DateTime      @default(now())
+}
+
+model Conjugation {
+  id          String  @id @default(cuid())
+  verbId      String
+  verb        Verb    @relation(fields: [verbId], references: [id], onDelete: Cascade)
+  mood        Mood
+  tense       Tense
+  person      Person
+  form        String
+  isIrregular Boolean @default(false)
+  ruleId      String?
+  rule        Rule?   @relation(fields: [ruleId], references: [id])
+  noteEn      String?
+  noteDe      String?
+
+  @@unique([verbId, mood, tense, person])
+}
+
+model Rule {
+  id            String        @id @default(cuid())
+  code          String        @unique
+  descriptionEn String
+  descriptionDe String
+  conjugations  Conjugation[]
+}

@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+*.db
+*.db-journal
+
+# Prisma
+apps/api/prisma/migrations/
+apps/api/prisma/dev.db
+
+# Vite
+apps/web/dist/
+
+# Data pipeline outputs (gitignored via data/.gitignore too)
+data/raw/
+data/processed/
+data/scripts/.venv/
+data/scripts/.env
