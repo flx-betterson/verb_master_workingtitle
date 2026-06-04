@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 0 | Tech stack decision | — | DONE |
 | 1 | Data schema design | MVP Local | DONE |
-| 2 | Data sourcing + ETL | MVP Local | — |
+| 2 | Data sourcing + ETL | MVP Local | DONE |
 | 3 | Backend scaffold + API endpoints | MVP Local | — |
 | 4 | Frontend scaffold + quiz loop | MVP Local | — |
 | 5 | Local launch + manual testing | MVP Local | — |
@@ -14,9 +14,9 @@
 | 7 | User auth + cross-device sync | v2 Auth | DEFERRED |
 
 ## Current Focus
-**Phase 2 — Data Sourcing**
-Source a Spanish verb conjugation dataset (~500-1000 verbs, all tenses, DE+EN translations).
-Do not use LLMs as primary source. See Issue #3 on GitHub.
+**Phase 3 — Backend Scaffold**
+Monorepo setup (npm workspaces), Prisma schema, Fastify API endpoints.
+See Issues #5, #6, #7 on GitHub.
 
 ## Handoff Docs
 Agent task briefs live in `planning/handoffs/`.

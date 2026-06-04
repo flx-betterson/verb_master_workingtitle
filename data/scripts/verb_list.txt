@@ -94,7 +94,6 @@ tocar
 cocinar
 limpiar
 arreglar
-llegar
 regresar
 sacar
 meter
@@ -188,7 +187,6 @@ fracasar
 transformar
 evolucionar
 progresar
-requerir
 referir
 limitar
 influir
