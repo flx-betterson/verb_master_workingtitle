@@ -1,7 +1,11 @@
 """
 02_enrich.py
 Enrich verbs with EN/DE translations, CEFR level, thematic group, and isReflexive
-using the Claude API. Processes verbs in batches of 50.
+using the OpenAI API (gpt-4o-mini). Processes verbs in batches of 50.
+
+Model choice: gpt-4o-mini — translation and classification of common vocabulary is
+well within its capability at ~20x lower cost than gpt-4o. JSON mode guarantees
+valid JSON output without manual parsing.
 
 Input:  data/raw/conjugations.json
 Output: data/raw/enriched.json
@@ -16,7 +20,7 @@ import time
 from pathlib import Path
 
 try:
-    import anthropic
+    from openai import OpenAI, RateLimitError
     from dotenv import load_dotenv
 except ImportError:
     print("ERROR: dependencies missing. Run: pip install -r data/scripts/requirements.txt")
@@ -29,6 +33,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent
 IN_PATH = REPO_ROOT / "data" / "raw" / "conjugations.json"
 OUT_PATH = REPO_ROOT / "data" / "raw" / "enriched.json"
 
+MODEL = "gpt-4o-mini"
 BATCH_SIZE = 50
 VALID_CEFR = {"A1", "A2", "B1", "B2"}
 
@@ -39,8 +44,10 @@ THEMATIC_GROUPS = [
     "creation_destruction", "food_eating", "health_body", "time_sequence", "other"
 ]
 
-PROMPT_TEMPLATE = """You are a Spanish linguistics expert. For each Spanish verb in the list below,
-return a JSON array with one object per verb in the same order.
+SYSTEM_PROMPT = "You are a Spanish linguistics expert. Always respond with valid JSON."
+
+USER_PROMPT_TEMPLATE = """For each Spanish verb in the list below, return a JSON object with a
+single key "verbs" containing an array — one object per verb, in the same order.
 
 Each object must have exactly these fields:
 - "infinitive": the verb as given
@@ -54,31 +61,16 @@ Each object must have exactly these fields:
 Rules:
 - Prefer the most common, natural translations over literal ones
 - For cefrLevel, use the level at which this verb is typically first introduced to learners
-- Return ONLY the JSON array, no explanation or markdown
 
 Verbs:
 {verbs}"""
 
 
 def build_prompt(verbs: list[str]) -> str:
-    return PROMPT_TEMPLATE.format(
+    return USER_PROMPT_TEMPLATE.format(
         groups=", ".join(THEMATIC_GROUPS),
         verbs="\n".join(f"- {v}" for v in verbs),
     )
-
-
-def parse_response(text: str) -> list[dict] | None:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"  ERROR parsing JSON: {e}")
-        print(f"  Raw response: {text[:300]}")
-        return None
 
 
 def validate_entry(entry: dict) -> list[str]:
@@ -94,25 +86,31 @@ def validate_entry(entry: dict) -> list[str]:
     return issues
 
 
-def process_batch(client: anthropic.Anthropic, verbs: list[str], attempt: int = 1) -> list[dict] | None:
+def process_batch(client: OpenAI, verbs: list[str], attempt: int = 1) -> list[dict] | None:
     if attempt > 3:
         print("  ERROR: max retries reached for this batch")
         return None
 
     try:
-        message = client.messages.create(
-            model="claude-opus-4-8",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": build_prompt(verbs)}],
+        response = client.chat.completions.create(
+            model=MODEL,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_prompt(verbs)},
+            ],
         )
-        text = message.content[0].text
-        entries = parse_response(text)
-        if entries is None:
-            print(f"  Retrying batch (attempt {attempt + 1})...")
+        data = json.loads(response.choices[0].message.content)
+        entries = data.get("verbs")
+        if not isinstance(entries, list):
+            print(f"  ERROR: response missing 'verbs' array. Keys: {list(data.keys())}")
+            print(f"  Retrying (attempt {attempt + 1})...")
             time.sleep(2)
             return process_batch(client, verbs, attempt + 1)
         return entries
-    except anthropic.RateLimitError:
+
+    except RateLimitError:
         wait = 30 * attempt
         print(f"  Rate limited — waiting {wait}s...")
         time.sleep(wait)
@@ -123,20 +121,19 @@ def process_batch(client: anthropic.Anthropic, verbs: list[str], attempt: int = 
 
 
 def main():
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("ERROR: ANTHROPIC_API_KEY not set. Copy data/scripts/.env.example to .env and fill it in.")
+        print("ERROR: OPENAI_API_KEY not set. Copy data/scripts/.env.example to .env and fill it in.")
         sys.exit(1)
 
     with open(IN_PATH, encoding="utf-8") as f:
         conjugation_data = json.load(f)
 
     infinitives = [v["infinitive"] for v in conjugation_data]
-    print(f"Enriching {len(infinitives)} verbs in batches of {BATCH_SIZE}...")
+    print(f"Enriching {len(infinitives)} verbs in batches of {BATCH_SIZE} using {MODEL}...")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = OpenAI(api_key=api_key)
     enrichment_map: dict[str, dict] = {}
-
     batches = [infinitives[i:i + BATCH_SIZE] for i in range(0, len(infinitives), BATCH_SIZE)]
 
     for batch_num, batch in enumerate(batches, 1):
@@ -154,9 +151,8 @@ def main():
             enrichment_map[entry["infinitive"]] = entry
 
         print(f"  Done — {len(entries)} verbs enriched")
-        # Small delay to avoid rate limits
         if batch_num < len(batches):
-            time.sleep(1)
+            time.sleep(0.5)
 
     # Merge enrichment into conjugation data
     results = []
@@ -186,7 +182,7 @@ def main():
     print(f"\nDone. {len(results)} verbs written to {OUT_PATH}")
     if missing:
         print(f"Missing enrichment for ({len(missing)}): {', '.join(missing)}")
-        print("Re-run this script to retry missing verbs (already-enriched verbs are included in output).")
+        print("Re-run to retry — already-enriched verbs carry over.")
 
 
 if __name__ == "__main__":

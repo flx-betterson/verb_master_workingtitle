@@ -1,3 +1,5 @@
 raw/
 processed/
 scripts/.env
+scripts/.venv/
+.env

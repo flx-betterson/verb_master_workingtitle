@@ -81,11 +81,67 @@ PERSON_MAP = {
     "3p": "ELLOS_ELLAS_USTEDES",
 }
 
-# Known-bad gerund values from the library (data bugs, typically on highly irregular verbs).
-# The library conflates gerundio/participio for these — hardcode the correct gerund.
-GERUND_OVERRIDES = {
-    "ser": "siendo",
-    "ir":  "yendo",
+# The library's Gerundio section always returns the past participle, not the gerund.
+# We ignore it entirely and construct the gerund from the infinitive instead.
+# Overrides cover stem-changing and other irregular gerunds.
+# Irregular past participles. Regular ones are constructed by construct_past_participle().
+# The library's Participo section is unreliable (prepends stem/char to correct form)
+# so we ignore it entirely and construct from the infinitive.
+PARTICIPLE_OVERRIDES: dict[str, str] = {
+    "abrir":      "abierto",
+    "cubrir":     "cubierto",
+    "decir":      "dicho",
+    "escribir":   "escrito",
+    "hacer":      "hecho",
+    "satisfacer": "satisfecho",
+    "morir":      "muerto",
+    "poner":      "puesto",
+    "componer":   "compuesto",
+    "proponer":   "propuesto",
+    "oponer":     "opuesto",
+    "resolver":   "resuelto",
+    "absolver":   "absuelto",
+    "volver":     "vuelto",
+    "devolver":   "devuelto",
+    "envolver":   "envuelto",
+    "romper":     "roto",
+    "ver":        "visto",
+    "prever":     "previsto",
+    "freír":      "frito",
+    "imprimir":   "impreso",
+}
+
+GERUND_OVERRIDES: dict[str, str] = {
+    "ser":       "siendo",
+    "ir":        "yendo",
+    "poder":     "pudiendo",
+    "dormir":    "durmiendo",
+    "morir":     "muriendo",
+    "decir":     "diciendo",
+    "pedir":     "pidiendo",
+    "sentir":    "sintiendo",
+    "seguir":    "siguiendo",
+    "conseguir": "consiguiendo",
+    "venir":     "viniendo",
+    "repetir":   "repitiendo",
+    "medir":     "midiendo",
+    "servir":    "sirviendo",
+    "hervir":    "hirviendo",
+    "mentir":    "mintiendo",
+    "preferir":  "prefiriendo",
+    "reír":      "riendo",
+    "freír":     "friendo",
+    "corregir":  "corrigiendo",
+    "elegir":    "eligiendo",
+    "traer":     "trayendo",
+    "caer":      "cayendo",
+    "leer":      "leyendo",
+    "creer":     "creyendo",
+    "oír":       "oyendo",
+    "huir":      "huyendo",
+    "incluir":   "incluyendo",
+    "construir": "construyendo",
+    "destruir":  "destruyendo",
 }
 
 # Haber auxiliary forms for constructing compound tenses if library omits them
@@ -120,6 +176,28 @@ def load_verb_list(path: Path) -> list[str]:
             if line and not line.startswith("#"):
                 verbs.append(line)
     return verbs
+
+
+def construct_gerund(infinitive: str) -> str:
+    """Construct gerund from infinitive. Overrides cover irregular stem-changers."""
+    if infinitive in GERUND_OVERRIDES:
+        return GERUND_OVERRIDES[infinitive]
+    if infinitive.endswith("ar"):
+        return infinitive[:-2] + "ando"
+    if infinitive.endswith("er") or infinitive.endswith("ir"):
+        return infinitive[:-2] + "iendo"
+    return infinitive
+
+
+def construct_past_participle(infinitive: str) -> str:
+    """Construct past participle from infinitive. Overrides cover irregular forms."""
+    if infinitive in PARTICIPLE_OVERRIDES:
+        return PARTICIPLE_OVERRIDES[infinitive]
+    if infinitive.endswith("ar"):
+        return infinitive[:-2] + "ado"
+    if infinitive.endswith("er") or infinitive.endswith("ir"):
+        return infinitive[:-2] + "ido"
+    return infinitive
 
 
 def normalize_tense_key(mood_key: str, raw_tense_key: str) -> str:
@@ -173,22 +251,14 @@ def conjugate_verb(conjugator, infinitive: str) -> dict:
         return None
 
     conjugations = []
-    past_participle = None
-    gerund = None
-
     raw = result.conjug_info
 
     for mood_key, tenses in raw.items():
         if mood_key not in MOOD_MAP:
-            if "Particip" in mood_key:  # handles "Participio" and "Participo" (library typo)
-                result = extract_nested_str(tenses)
-                if result:
-                    past_participle = fix_encoding(result)
-            elif "Gerundio" in mood_key:
-                result = extract_nested_str(tenses)
-                if result:
-                    gerund = fix_encoding(result)
-            elif mood_key not in ("Infinitivo", "Infinitif"):
+            # Gerundio and Participo are intentionally ignored — the library stores
+            # wrong/corrupted values for both. They are constructed from the infinitive.
+            known_ignored = ("Gerundio", "Participo", "Participio", "Infinitivo", "Infinitif")
+            if not any(x in mood_key for x in known_ignored):
                 print(f"  UNMAPPED mood: '{mood_key}' — add to MOOD_MAP if needed")
             continue
 
@@ -232,8 +302,8 @@ def conjugate_verb(conjugator, infinitive: str) -> dict:
         seen[(conj["mood"], conj["tense"], conj["person"])] = conj
     conjugations = list(seen.values())
 
-    if infinitive in GERUND_OVERRIDES:
-        gerund = GERUND_OVERRIDES[infinitive]
+    gerund = construct_gerund(infinitive)
+    past_participle = construct_past_participle(infinitive)
 
     return {
         "infinitive": infinitive,
